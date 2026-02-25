@@ -1,4 +1,7 @@
-const API_URL = 'http://localhost:3001/api';
+const DEV_URL = 'http://localhost:3001/api';
+const PROD_URL = 'https://startup-ai-proxy.winter-lake-b4eb.workers.dev/api';
+
+const API_URL = window.location.hostname === 'localhost' ? DEV_URL : PROD_URL;
 
 export class OllamaClient {
   static async chat(messages) {
@@ -6,10 +9,7 @@ export class OllamaClient {
       const response = await fetch(`${API_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'llama3.2',
-          messages
-        })
+        body: JSON.stringify({ messages })
       });
 
       if (!response.ok) {
@@ -19,7 +19,7 @@ export class OllamaClient {
       const data = await response.json();
       return data.message?.content || '...';
     } catch (err) {
-      console.error('OllamaClient error:', err.message);
+      console.error('AI client error:', err.message);
       return null;
     }
   }

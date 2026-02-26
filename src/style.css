@@ -334,8 +334,8 @@ h1, h2, h3, h4, h5, h6 {
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
-  width: 140px;
-  height: 260px;
+  width: 80px;
+  height: 12vh;
   pointer-events: auto;
 }
 
@@ -346,7 +346,7 @@ h1, h2, h3, h4, h5, h6 {
 /* Hover action buttons — radial menu on ground plane */
 .agent-hover-actions {
   position: absolute;
-  top: calc(100% + 120px);
+  top: calc(100% + 10vh);
   left: 50%;
   transform: translateX(-50%) perspective(300px) rotateX(35deg);
   display: flex;

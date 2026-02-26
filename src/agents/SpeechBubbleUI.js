@@ -202,6 +202,30 @@ export class SpeechBubbleUI {
     }
   }
 
+  showReaction(agentId, emoji, character, duration = 1.5) {
+    const key = agentId + '_reaction';
+    // Remove existing reaction for this agent
+    const existing = this.activeBubbles.get(key);
+    if (existing) {
+      existing.element.remove();
+      this.activeBubbles.delete(key);
+    }
+
+    const container = document.createElement('div');
+    container.className = 'reaction-bubble';
+    container.textContent = emoji;
+
+    document.getElementById('app').appendChild(container);
+
+    this.activeBubbles.set(key, {
+      element: container,
+      character,
+      timer: duration
+    });
+
+    this.updatePosition(key);
+  }
+
   // Create persistent floating name labels
   createNameLabel(agentId, agentName, character, cssColor, role) {
     const label = document.createElement('div');

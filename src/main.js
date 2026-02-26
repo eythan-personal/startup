@@ -47,7 +47,7 @@ async function initAgents() {
   try {
     console.log('Loading character models...');
 
-    const [baseGltf, idleGltf, walkGltf, runGltf, danceGltf, jumpGltf, jumpRunGltf, waterCoolerGltf] = await Promise.all([
+    const [baseGltf, idleGltf, walkGltf, runGltf, danceGltf, jumpGltf, jumpRunGltf, waveHelpGltf, waveOneHandGltf, backflipGltf, waterCoolerGltf] = await Promise.all([
       loadGLB('/models/Meshy_AI_Character_output.glb'),
       loadGLB('/models/Meshy_AI_Animation_Idle_3_withSkin.glb'),
       loadGLB('/models/Meshy_AI_Animation_Walking_withSkin.glb'),
@@ -55,6 +55,9 @@ async function initAgents() {
       loadGLB('/models/Meshy_AI_Animation_Bubble_Dance_withSkin.glb'),
       loadGLB('/models/Meshy_AI_Animation_Jump_with_Arms_Open_withSkin.glb'),
       loadGLB('/models/Meshy_AI_Animation_Jump_Run_withSkin.glb'),
+      loadGLB('/models/Meshy_AI_Animation_Wave_for_Help_3_withSkin.glb'),
+      loadGLB('/models/Meshy_AI_Animation_Wave_One_Hand_withSkin.glb'),
+      loadGLB('/models/Meshy_AI_Animation_Backflip_Jump_withSkin.glb'),
       loadGLB('/models/water_cooler.glb').catch(() => null)
     ]);
 
@@ -97,7 +100,10 @@ async function initAgents() {
       run: runGltf.animations[0] || null,
       dance: danceGltf.animations[0] || null,
       jump: jumpGltf.animations[0] || null,
-      jumpRun: jumpRunGltf.animations[0] || null
+      jumpRun: jumpRunGltf.animations[0] || null,
+      waveHelp: waveHelpGltf.animations[0] || null,
+      wave: waveOneHandGltf.animations[0] || null,
+      backflip: backflipGltf.animations[0] || null
     };
 
     // Pass model data to AgentManager — agents will be created after editor

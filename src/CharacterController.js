@@ -143,8 +143,8 @@ export class CharacterController {
     // Setup animation mixer
     this.mixer = new THREE.AnimationMixer(this.character);
 
-    const animKeys = ['idle', 'walk', 'run', 'dance', 'jump', 'jumpRun'];
-    const loopOnce = ['jump', 'jumpRun'];
+    const animKeys = ['idle', 'walk', 'run', 'dance', 'jump', 'jumpRun', 'waveHelp', 'wave', 'backflip'];
+    const loopOnce = ['jump', 'jumpRun', 'waveHelp', 'wave', 'backflip'];
 
     animKeys.forEach((key) => {
       const clip = gltfModels.animations[key];

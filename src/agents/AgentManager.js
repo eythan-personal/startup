@@ -7,6 +7,7 @@ import { AgentEditModal } from './RoleEditorUI.js';
 import { DMWindowUI } from './DMWindowUI.js';
 import { CrewHUD } from './CrewHUD.js';
 import { AGENT_PERSONALITIES, createBlankPersonality } from './AgentPersonality.js';
+import { ProximitySystem } from './ProximitySystem.js';
 
 export class AgentManager {
   constructor(camera, scene, renderer) {
@@ -30,6 +31,7 @@ export class AgentManager {
     this.agentsCreated = false;
     this.modelData = undefined;
     this.crewHUD = null;
+    this.proximitySystem = null;
   }
 
   setModelData(data) {
@@ -174,6 +176,8 @@ export class AgentManager {
       this.speechBubbleUI.updateNameLabel(agent.nameLabel, agent.controller.character);
     }
 
+    if (this.proximitySystem) this.proximitySystem.update(delta);
+
     if (!this.agentsCreated && this.modelData !== undefined) {
       this.agentsCreated = true;
       this._createDefaultAgents();
@@ -314,5 +318,12 @@ export class AgentManager {
     this._showAppUI();
 
     this.conversationManager.startGroupMeeting(this.agents);
+
+    this.proximitySystem = new ProximitySystem(
+      this.agents,
+      this.conversationManager.sideConvoManager,
+      this.speechBubbleUI,
+      this.conversationManager.autonomyLoop
+    );
   }
 }

@@ -5,6 +5,7 @@ import { FileBrowserUI } from './FileBrowserUI.js';
 import { AgentFileGenerator } from './AgentFileGenerator.js';
 import { FileActivityPanel } from './FileActivityPanel.js';
 import { AgentMemory } from './AgentMemory.js';
+import { AgentAutonomyLoop } from './AgentAutonomyLoop.js';
 
 const LENGTH_HINTS = [
   'Keep it to 1 sentence.',
@@ -43,6 +44,7 @@ export class ConversationManager {
     this.paused = false;
     this._pauseResolve = null;
     this.sideConvoManager = null;
+    this.autonomyLoop = null;
     this.fileGenerator = new AgentFileGenerator(this.fileActivityPanel);
     this.agentMemory = new AgentMemory();
 
@@ -158,6 +160,15 @@ export class ConversationManager {
       () => this.workingContext,
       this.agentMemory
     );
+    this.autonomyLoop = new AgentAutonomyLoop(
+      this.speechBubbleUI,
+      this.agents,
+      this.sideConvoManager,
+      () => this.workingContext,
+      this.agentMemory
+    );
+    this.autonomyLoop.start();
+
     this._enableInput();
     this.chatInput.input.placeholder = 'Tell the team what to work on...';
     this.chatInput.hint.textContent = 'Give the team a direction to start planning';
@@ -207,6 +218,8 @@ export class ConversationManager {
   }
 
   async _autonomousLoop() {
+    if (this.autonomyLoop) this.autonomyLoop.pause();
+
     const agentCount = this.agents.length;
     let speakerIndex = 0;
 
@@ -295,11 +308,9 @@ export class ConversationManager {
         }
       }
 
-      // Maybe trigger side conversation
-      if (this.sideConvoManager) {
-        this.sideConvoManager.maybeStartSideChat();
-      }
     }
+
+    if (this.autonomyLoop) this.autonomyLoop.resume();
   }
 
   async _getAgentResponse(agent) {
@@ -496,10 +507,6 @@ export class ConversationManager {
       // After agents respond, check if the plan should be updated
       await this._updatePlanFromGuidance(userMessage);
 
-      // Maybe trigger a side conversation (non-blocking)
-      if (this.sideConvoManager) {
-        this.sideConvoManager.maybeStartSideChat();
-      }
     }
   }
 

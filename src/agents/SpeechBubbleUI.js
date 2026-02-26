@@ -126,6 +126,37 @@ export class SpeechBubbleUI {
     this.updatePosition(agentId);
   }
 
+  showThought(agentId, agentName, text, character, cssColor, duration = 3.5) {
+    this.hide(agentId);
+
+    const container = document.createElement('div');
+    container.className = 'speech-bubble agent-bubble thought-bubble';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
+    container.style.borderLeftColor = cssColor;
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'bubble-agent-name';
+    nameEl.textContent = agentName;
+    nameEl.style.color = cssColor;
+    container.appendChild(nameEl);
+
+    const textEl = document.createElement('div');
+    textEl.className = 'bubble-text';
+    textEl.textContent = text;
+    container.appendChild(textEl);
+
+    document.getElementById('app').appendChild(container);
+
+    this.activeBubbles.set(agentId, {
+      element: container,
+      character,
+      timer: duration
+    });
+
+    this.updatePosition(agentId);
+  }
+
   showLoading(agentId, agentName, character, cssColor) {
     this.show(agentId, agentName, '...', character, cssColor, 999);
     const bubble = this.activeBubbles.get(agentId);

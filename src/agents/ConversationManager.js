@@ -168,6 +168,7 @@ export class ConversationManager {
       this.agentMemory
     );
     this.autonomyLoop.start();
+    this.autonomyLoop.pause(); // Stay paused until round-robin meeting finishes
 
     this._enableInput();
     this.chatInput.input.placeholder = 'Tell the team what to work on...';

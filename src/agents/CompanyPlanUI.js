@@ -1,58 +1,64 @@
-const PLAN_SECTIONS = [
-  { key: 'idea', label: 'The Idea', icon: '?' },
-  { key: 'name', label: 'Company Name', icon: '?' },
-  { key: 'product', label: 'Product', icon: '?' },
-  { key: 'users', label: 'Target Users', icon: '?' },
-  { key: 'model', label: 'Business Model', icon: '?' },
-  { key: 'roadmap', label: 'V1 Roadmap', icon: '?' },
-];
+import { renderMarkdown } from './markdown.js';
+
+const DEFAULT_ICONS = {
+  idea: '?', name: '?', product: '?', users: '?', model: '?', roadmap: '?',
+  architecture: '?', tech_stack: '?', design: '?', strategy: '?',
+};
+
+function labelFromKey(key) {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 
 export class CompanyPlanUI {
   constructor() {
     this.plan = {};
     this.panel = this._create();
     this.sections = {};
-    this._buildSections();
   }
 
   _create() {
-    const panel = document.createElement('div');
+    const panel = document.createElement('aside');
     panel.className = 'plan-panel';
+    panel.setAttribute('aria-label', 'Project plan');
     panel.innerHTML = `
       <div class="plan-header">
-        <div class="plan-title">Startup Plan</div>
-        <div class="plan-subtitle">Building something together...</div>
+        <h2 class="plan-title">Project Plan</h2>
+        <p class="plan-subtitle" aria-live="polite">Building something together...</p>
       </div>
-      <div class="plan-sections"></div>
+      <div class="plan-sections" role="list" aria-label="Plan sections"></div>
     `;
+    // Hidden — plan data is tracked internally for agent context,
+    // but the FileActivityPanel is the visible left panel now.
+    panel.style.display = 'none';
     document.getElementById('app').appendChild(panel);
-
-    // Show after a beat
-    requestAnimationFrame(() => panel.classList.add('visible'));
     return panel;
   }
 
-  _buildSections() {
+  _ensureSection(key) {
+    if (this.sections[key]) return this.sections[key];
+
     const container = this.panel.querySelector('.plan-sections');
-    for (const section of PLAN_SECTIONS) {
-      const el = document.createElement('div');
-      el.className = 'plan-section pending';
-      el.dataset.key = section.key;
-      el.innerHTML = `
-        <div class="plan-section-header">
-          <span class="plan-section-icon">${section.icon}</span>
-          <span class="plan-section-label">${section.label}</span>
-        </div>
-        <div class="plan-section-content"></div>
-      `;
-      container.appendChild(el);
-      this.sections[section.key] = el;
-    }
+    const icon = DEFAULT_ICONS[key] || '?';
+    const label = labelFromKey(key);
+
+    const el = document.createElement('div');
+    el.className = 'plan-section pending';
+    el.dataset.key = key;
+    el.setAttribute('role', 'listitem');
+    el.innerHTML = `
+      <div class="plan-section-header">
+        <span class="plan-section-icon" aria-hidden="true">${icon}</span>
+        <h3 class="plan-section-label">${label}</h3>
+      </div>
+      <div class="plan-section-content" aria-live="polite"></div>
+    `;
+    container.appendChild(el);
+    this.sections[key] = el;
+    return el;
   }
 
   markActive(key) {
-    const el = this.sections[key];
-    if (!el) return;
+    const el = this._ensureSection(key);
     // Remove active from others
     Object.values(this.sections).forEach(s => s.classList.remove('active'));
     el.classList.remove('pending');
@@ -62,10 +68,9 @@ export class CompanyPlanUI {
   }
 
   updateSection(key, text) {
-    const el = this.sections[key];
-    if (!el) return;
+    const el = this._ensureSection(key);
     const content = el.querySelector('.plan-section-content');
-    content.textContent = text;
+    content.innerHTML = renderMarkdown(text);
     el.classList.remove('active', 'pending');
     el.classList.add('done');
     this.plan[key] = text;
@@ -80,9 +85,9 @@ export class CompanyPlanUI {
 
   getCurrentPlanSummary() {
     let summary = '';
-    for (const section of PLAN_SECTIONS) {
-      if (this.plan[section.key]) {
-        summary += `${section.label}: ${this.plan[section.key]}\n`;
+    for (const [key, value] of Object.entries(this.plan)) {
+      if (value) {
+        summary += `${labelFromKey(key)}: ${value}\n`;
       }
     }
     return summary;

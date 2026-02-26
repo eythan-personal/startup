@@ -1,49 +1,39 @@
-import { OllamaClient } from './OllamaClient.js';
+import { AIClient } from './AIClient.js';
 import { CompanyPlanUI } from './CompanyPlanUI.js';
+import { SideConversationManager } from './SideConversationManager.js';
+import { FileBrowserUI } from './FileBrowserUI.js';
+import { AgentFileGenerator } from './AgentFileGenerator.js';
+import { FileActivityPanel } from './FileActivityPanel.js';
 
-const PHASES = [
-  {
-    key: 'idea',
-    rounds: 3,
-    prompt: 'Your team is meeting to brainstorm a startup idea. Pitch or riff on ideas. Be creative and specific. What problem should we solve?',
-    extractPrompt: 'Based on the conversation, summarize the startup idea the team is leaning toward in 1-2 sentences. Just the idea, nothing else.'
-  },
-  {
-    key: 'name',
-    rounds: 2,
-    prompt: 'The team is picking a company name. Suggest names or react to others\' suggestions. Be opinionated.',
-    extractPrompt: 'Based on the conversation, what company name did the team settle on (or lean toward)? Reply with ONLY the company name, nothing else.'
-  },
-  {
-    key: 'product',
-    rounds: 3,
-    prompt: 'Now define the product. What does it actually do? What are the core features? Think from your role\'s perspective.',
-    extractPrompt: 'Based on the conversation, describe the product in 2-3 sentences. What does it do and what are its key features? Be specific.'
-  },
-  {
-    key: 'users',
-    rounds: 2,
-    prompt: 'Who are the target users? Who would pay for this? Get specific about the audience.',
-    extractPrompt: 'Based on the conversation, describe the target users in 1-2 sentences. Be specific about who they are.'
-  },
-  {
-    key: 'model',
-    rounds: 2,
-    prompt: 'How will this make money? Discuss pricing, revenue model, and go-to-market. Think practically.',
-    extractPrompt: 'Based on the conversation, summarize the business model in 1-2 sentences. How does it make money?'
-  },
-  {
-    key: 'roadmap',
-    rounds: 2,
-    prompt: 'What should V1 look like? What do we build first? Prioritize ruthlessly for a 4-week sprint.',
-    extractPrompt: 'Based on the conversation, list the V1 roadmap as 3-5 short bullet points. Format: "- item". Nothing else.'
-  }
+const LENGTH_HINTS = [
+  'Keep it to 1 sentence.',
+  'Keep it to 1-2 sentences.',
+  'Keep it to 1-2 sentences.',
+  'Keep it to 2-3 sentences.',
+  'A short response — just a sentence or two.',
+  'Be brief.',
 ];
+
+function pickLengthHint() {
+  return LENGTH_HINTS[Math.floor(Math.random() * LENGTH_HINTS.length)];
+}
+
+function trimToSentence(text, maxLen = 300) {
+  if (!text || text.length <= maxLen) return text;
+  const trimmed = text.slice(0, maxLen);
+  const lastEnd = Math.max(
+    trimmed.lastIndexOf('.'),
+    trimmed.lastIndexOf('!'),
+    trimmed.lastIndexOf('?')
+  );
+  return lastEnd > maxLen * 0.3 ? trimmed.slice(0, lastEnd + 1) : trimmed;
+}
 
 export class ConversationManager {
   constructor(speechBubbleUI) {
     this.speechBubbleUI = speechBubbleUI;
     this.planUI = new CompanyPlanUI();
+    this.fileActivityPanel = new FileActivityPanel();
     this.active = false;
     this.BUBBLE_DURATION = 4;
     this.chatInput = this._createChatInput();
@@ -51,20 +41,34 @@ export class ConversationManager {
     this._userMessageResolve = null;
     this.paused = false;
     this._pauseResolve = null;
+    this.sideConvoManager = null;
+    this.fileGenerator = new AgentFileGenerator(this.fileActivityPanel);
+
+    this.workingContext = {
+      goal: '',
+      status: 'active',       // 'active' | 'building' | 'complete'
+      decisions: [],           // [{ topic, decision }] — compressed memory
+      currentFocus: '',
+      roundCount: 0,
+    };
   }
 
   _createChatInput() {
     const wrapper = document.createElement('div');
     wrapper.className = 'chat-input-wrapper';
     wrapper.innerHTML = `
-      <form class="chat-input-form">
-        <button type="button" class="chat-pause" title="Pause session">
-          <span class="pause-icon">&#10074;&#10074;</span>
-        </button>
-        <input type="text" class="chat-input" placeholder="Waiting for the team to finish planning..." disabled />
-        <button type="submit" class="chat-send" disabled>Send</button>
-      </form>
-      <div class="chat-input-hint">You'll be able to guide the team once they have a plan</div>
+      <div class="chat-input-row">
+        <form class="chat-input-form" role="search" aria-label="Team chat">
+          <button type="button" class="chat-pause" aria-label="Pause session">
+            <span class="pause-icon" aria-hidden="true">&#10074;&#10074;</span>
+          </button>
+          <label for="chat-main-input" class="sr-only">Message the team</label>
+          <input id="chat-main-input" type="text" class="chat-input" placeholder="Waiting for the team to finish planning..." disabled />
+          <button type="submit" class="chat-send" disabled aria-label="Send message">Send</button>
+        </form>
+        <button type="button" class="file-browser-btn" aria-label="Open file browser"><i class="ri-folder-3-line"></i></button>
+      </div>
+      <div class="chat-input-hint" role="status" aria-live="polite">You'll be able to guide the team once they have a plan</div>
     `;
     document.getElementById('app').appendChild(wrapper);
 
@@ -87,6 +91,12 @@ export class ConversationManager {
 
     pauseBtn.addEventListener('click', () => {
       this._togglePause();
+    });
+
+    const filesBtn = wrapper.querySelector('.file-browser-btn');
+    filesBtn.addEventListener('click', () => {
+      if (!this._fileBrowserUI) this._fileBrowserUI = new FileBrowserUI();
+      this._fileBrowserUI.open();
     });
 
     return { wrapper, input, button, pauseBtn, hint: wrapper.querySelector('.chat-input-hint') };
@@ -114,6 +124,13 @@ export class ConversationManager {
     });
   }
 
+  /** Non-blocking: returns pending user message or null */
+  _consumeUserMessage() {
+    const msg = this._pendingUserMessage;
+    this._pendingUserMessage = null;
+    return msg;
+  }
+
   isConversationActive() {
     return this.active;
   }
@@ -124,44 +141,268 @@ export class ConversationManager {
 
     this.agents = agentEntries;
     this.history = [];
+    this.fileActivityPanel.setAgents(this.agents);
 
-    // Gather all agents to center
-    const positions = [
-      { x: -2, z: -1 },
-      { x: 2, z: -1 },
-      { x: 0, z: 2 }
-    ];
+    // Agents keep wandering — wait for user directive before gathering
+    this.sideConvoManager = new SideConversationManager(
+      this.speechBubbleUI,
+      this.agents,
+      this.planUI,
+      () => this.workingContext
+    );
+    this._enableInput();
+    this.chatInput.input.placeholder = 'Tell the team what to work on...';
+    this.chatInput.hint.textContent = 'Give the team a direction to start planning';
 
-    for (let i = 0; i < this.agents.length; i++) {
+    const firstMessage = await this._waitForUserMessage();
+    this.speechBubbleUI.addToChatLog('You', 'Founder', firstMessage, '#ffffff');
+    this.history.push({ speakerName: 'Founder', speakerId: 'user', text: firstMessage });
+
+    // Now gather agents into a circle for the meeting
+    this._gatherAgents();
+
+    // Initialize working context with the user's goal
+    this.workingContext.goal = firstMessage;
+    this.workingContext.currentFocus = 'Understanding the goal and brainstorming approach';
+
+    // Enable input so user can intervene anytime
+    this._enableInput();
+    this.chatInput.input.placeholder = 'Type anytime to redirect the team...';
+    this.chatInput.hint.textContent = 'Agents are discussing — type to steer anytime';
+
+    // Enter autonomous loop
+    await this._autonomousLoop();
+
+    // After autonomous loop exits (status = 'building'), build then guide
+    await this._buildPhase();
+    await this._guidanceLoop();
+  }
+
+  _gatherAgents() {
+    const meetingRadius = 2.5;
+    const agentCount = this.agents.length;
+
+    for (let i = 0; i < agentCount; i++) {
+      const angle = (2 * Math.PI * i) / agentCount;
+      const x = meetingRadius * Math.sin(angle);
+      const z = meetingRadius * Math.cos(angle);
       const ctrl = this.agents[i].controller;
       ctrl.pauseWandering();
       if (ctrl.character) {
-        ctrl.character.position.set(positions[i].x, 0, positions[i].z);
+        ctrl.character.position.set(x, 0, z);
       }
     }
 
     for (const a of this.agents) {
       a.controller.faceToward({ x: 0, y: 0, z: 0 });
     }
+  }
 
-    await this._delay(1000);
+  async _autonomousLoop() {
+    const agentCount = this.agents.length;
+    let speakerIndex = 0;
 
-    // Run through each planning phase
-    for (const phase of PHASES) {
-      this.planUI.markActive(phase.key);
-      await this._runPhase(phase);
-
-      const summary = await this._extractPlanUpdate(phase);
-      if (summary) {
-        this.planUI.updateSection(phase.key, summary);
+    while (this.workingContext.status === 'active') {
+      // Non-blocking check for user messages
+      const userMsg = this._consumeUserMessage();
+      if (userMsg) {
+        this.speechBubbleUI.addToChatLog('You', 'Founder', userMsg, '#ffffff');
+        this.history.push({ speakerName: 'Founder', speakerId: 'user', text: userMsg });
+        // Update working context with user direction
+        this.workingContext.currentFocus = userMsg;
       }
 
-      await this._delay(1000);
+      // Pick next speaker — round-robin with 15% skip chance for variation
+      if (Math.random() < 0.15 && agentCount > 2) {
+        speakerIndex = (speakerIndex + 1) % agentCount;
+      }
+      const agent = this.agents[speakerIndex];
+      speakerIndex = (speakerIndex + 1) % agentCount;
+
+      const speakerP = agent.personality;
+
+      // Face center
+      for (const a of this.agents) {
+        a.controller.faceToward({ x: 0, y: 0, z: 0 });
+      }
+
+      // Show loading
+      this.speechBubbleUI.showLoading(
+        speakerP.id,
+        speakerP.name,
+        agent.controller.character,
+        speakerP.cssColor
+      );
+
+      this.fileActivityPanel.setAgentStatus(speakerP.id, 'thinking...');
+      const response = await this._getAgentResponse(agent);
+      this.fileActivityPanel.setAgentStatus(speakerP.id, 'idle');
+      this.speechBubbleUI.hide(speakerP.id);
+
+      if (response) {
+        const cleanResponse = trimToSentence(response);
+
+        this.speechBubbleUI.show(
+          speakerP.id,
+          speakerP.name,
+          cleanResponse,
+          agent.controller.character,
+          speakerP.cssColor,
+          this.BUBBLE_DURATION
+        );
+
+        this.speechBubbleUI.addToChatLog(
+          speakerP.name,
+          speakerP.role,
+          cleanResponse,
+          speakerP.cssColor
+        );
+
+        this.history.push({
+          speakerName: speakerP.name,
+          speakerId: speakerP.id,
+          text: cleanResponse
+        });
+
+        await this._delay(this.BUBBLE_DURATION * 1000);
+      }
+
+      this.workingContext.roundCount++;
+
+      // Facilitator check every agents.length * 2 rounds
+      if (this.workingContext.roundCount % (agentCount * 2) === 0) {
+        await this._runFacilitator();
+      }
+
+      // File generation after round 9+ every agents.length rounds
+      if (this.workingContext.roundCount >= 9 && this.workingContext.roundCount % agentCount === 0) {
+        const createdFiles = await this.fileGenerator.maybeGenerate(agent, this.history, response || '');
+        if (createdFiles.length > 0) {
+          for (const filePath of createdFiles) {
+            this.speechBubbleUI.addFileNotice(speakerP.name, filePath, speakerP.cssColor);
+          }
+        }
+      }
+
+      // Maybe trigger side conversation
+      if (this.sideConvoManager) {
+        this.sideConvoManager.maybeStartSideChat();
+      }
+    }
+  }
+
+  async _getAgentResponse(agent) {
+    const speakerP = agent.personality;
+    const ctx = this.workingContext;
+
+    let systemContent = speakerP.systemPrompt + '\n\n';
+    systemContent += `You are in a team meeting. Your team's goal: ${ctx.goal}\n`;
+    if (ctx.currentFocus) {
+      systemContent += `Current focus: ${ctx.currentFocus}\n`;
+    }
+    if (ctx.decisions.length > 0) {
+      const recentDecisions = ctx.decisions.slice(-5);
+      systemContent += '\nKey decisions so far:\n';
+      for (const d of recentDecisions) {
+        systemContent += `- ${d.topic}: ${d.decision}\n`;
+      }
+    }
+    systemContent += `\n${pickLengthHint()} Be specific and opinionated. Stay in character.`;
+
+    const messages = [{ role: 'system', content: systemContent }];
+
+    // Last 10 history entries for token efficiency
+    const recent = this.history.slice(-10);
+    for (const entry of recent) {
+      const isOwn = entry.speakerId === speakerP.id;
+      if (entry.speakerId === 'user') {
+        messages.push({ role: 'user', content: `Team Lead: ${entry.text}` });
+      } else {
+        messages.push({
+          role: isOwn ? 'assistant' : 'user',
+          content: isOwn ? entry.text : `${entry.speakerName}: ${entry.text}`
+        });
+      }
     }
 
-    // Planning done — enter guidance mode
+    return AIClient.chat(messages);
+  }
+
+  async _runFacilitator() {
+    const ctx = this.workingContext;
+    const recent = this.history.slice(-8);
+    const transcript = recent.map(e => `${e.speakerName}: ${e.text}`).join('\n');
+    const planSummary = this.planUI.getCurrentPlanSummary();
+
+    let nudge = '';
+    if (ctx.roundCount >= this.agents.length * 10) {
+      nudge = '\nThe team has been discussing for a while. Strongly consider whether they have enough clarity to start building.';
+    }
+
+    const messages = [
+      {
+        role: 'system',
+        content: 'You are a meeting facilitator analyzing team progress. Return ONLY valid JSON: { "focus": "what team should discuss next", "decision": { "topic": "...", "decision": "..." } or null, "shouldBuild": true/false, "status": "active" or "building" }\n\nSet shouldBuild=true and status="building" when the team has enough clarity on their goal to start producing deliverables.' + nudge
+      },
+      {
+        role: 'user',
+        content: `Goal: ${ctx.goal}\nCurrent focus: ${ctx.currentFocus}\nRound: ${ctx.roundCount}\n${planSummary ? `Plan so far:\n${planSummary}\n` : ''}\nRecent discussion:\n${transcript}\n\nAnalyze progress and return JSON:`
+      }
+    ];
+
+    const result = await AIClient.chat(messages);
+    if (!result) return;
+
+    try {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return;
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      if (parsed.focus) {
+        ctx.currentFocus = parsed.focus;
+      }
+      if (parsed.decision && parsed.decision.topic) {
+        ctx.decisions.push(parsed.decision);
+        // Also update plan UI with the decision
+        const key = parsed.decision.topic.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+        if (key) {
+          this.planUI.updateSection(key, parsed.decision.decision);
+        }
+      }
+      if (parsed.shouldBuild || parsed.status === 'building') {
+        ctx.status = 'building';
+      }
+    } catch {
+      // JSON parse failure = no-op
+    }
+  }
+
+  async _buildPhase() {
+    const planSummary = this.planUI.getCurrentPlanSummary();
+
+    this.speechBubbleUI.addSystemMessage('Discussion complete — team is starting to build');
+
+    // Enable input early so user can redirect
     this._enableInput();
-    await this._guidanceLoop();
+    this.chatInput.input.placeholder = 'Team is building v1 — type to redirect anytime';
+    this.chatInput.hint.textContent = 'Team is building v1 — type to redirect anytime';
+
+    for (const agent of this.agents) {
+      const speakerP = agent.personality;
+
+      const createdFiles = await this.fileGenerator.generateForPlan(agent, planSummary, this.history);
+
+      for (const filePath of createdFiles) {
+        this.speechBubbleUI.addFileNotice(speakerP.name, filePath, speakerP.cssColor);
+      }
+
+      // Brief delay between agents for visual pacing
+      if (createdFiles.length > 0) {
+        await this._delay(800);
+      }
+    }
+
+    this.speechBubbleUI.addSystemMessage('v1 files ready — guide the team');
   }
 
   async _guidanceLoop() {
@@ -193,13 +434,15 @@ export class ConversationManager {
           speakerP.cssColor
         );
 
+        this.fileActivityPanel.setAgentStatus(speakerP.id, 'thinking...');
         const messages = this._buildGuidanceMessages(agent, userMessage);
-        const response = await OllamaClient.chat(messages);
+        const response = await AIClient.chat(messages);
+        this.fileActivityPanel.setAgentStatus(speakerP.id, 'idle');
         this.speechBubbleUI.hide(speakerP.id);
 
         if (!response) continue;
 
-        const cleanResponse = response.slice(0, 250);
+        const cleanResponse = trimToSentence(response);
 
         this.speechBubbleUI.show(
           speakerP.id,
@@ -224,23 +467,40 @@ export class ConversationManager {
         });
 
         await this._delay(this.BUBBLE_DURATION * 1000);
+
+        // Auto-generate files based on agent's expertise
+        const createdFiles = await this.fileGenerator.maybeGenerate(agent, this.history, cleanResponse);
+        if (createdFiles.length > 0) {
+          for (const filePath of createdFiles) {
+            this.speechBubbleUI.addFileNotice(speakerP.name, filePath, speakerP.cssColor);
+          }
+        }
       }
 
       // After agents respond, check if the plan should be updated
       await this._updatePlanFromGuidance(userMessage);
+
+      // Maybe trigger a side conversation (non-blocking)
+      if (this.sideConvoManager) {
+        this.sideConvoManager.maybeStartSideChat();
+      }
     }
   }
+
 
   _buildGuidanceMessages(agent, userMessage) {
     const speakerP = agent.personality;
     const planSoFar = this.planUI.getCurrentPlanSummary();
 
     let systemContent = speakerP.systemPrompt + '\n\n';
-    systemContent += 'You are in a team meeting with your cofounders. The founder/CEO is giving direction.\n';
+    systemContent += 'You are in a team meeting with your teammates. The team lead is giving direction.\n';
+    if (this.workingContext.goal) {
+      systemContent += `\nTeam goal: ${this.workingContext.goal}\n`;
+    }
     if (planSoFar) {
       systemContent += `\nCurrent plan:\n${planSoFar}\n`;
     }
-    systemContent += '\nRespond to the founder\'s input from your role\'s perspective. Be specific and actionable. Keep responses to 1-2 sentences. Stay in character.';
+    systemContent += `\nRespond to the team lead's input from your role's perspective. Be specific and actionable. ${pickLengthHint()} Stay in character.`;
 
     const messages = [{ role: 'system', content: systemContent }];
 
@@ -249,7 +509,7 @@ export class ConversationManager {
     for (const entry of recent) {
       const isOwn = entry.speakerId === speakerP.id;
       if (entry.speakerId === 'user') {
-        messages.push({ role: 'user', content: `Founder: ${entry.text}` });
+        messages.push({ role: 'user', content: `Team Lead: ${entry.text}` });
       } else {
         messages.push({
           role: isOwn ? 'assistant' : 'user',
@@ -269,7 +529,7 @@ export class ConversationManager {
     const messages = [
       {
         role: 'system',
-        content: 'You update a startup plan based on team discussion. Return ONLY a JSON object with keys to update. Valid keys: idea, name, product, users, model, roadmap. Only include keys that need to change based on the latest discussion. Values should be short strings (1-3 sentences, or bullet points for roadmap). If nothing needs to change, return {}.'
+        content: 'You update a project plan based on team discussion. Return ONLY a JSON object with keys to update. Keys can be any relevant topic (e.g. idea, name, product, users, model, roadmap, architecture, tech_stack, design, strategy — or any other relevant key). Only include keys that need to change based on the latest discussion. Values should be short strings (1-3 sentences, or bullet points for lists). If nothing needs to change, return {}.'
       },
       {
         role: 'user',
@@ -277,7 +537,7 @@ export class ConversationManager {
       }
     ];
 
-    const result = await OllamaClient.chat(messages);
+    const result = await AIClient.chat(messages);
     if (!result) return;
 
     // Try to parse JSON from the response
@@ -296,114 +556,17 @@ export class ConversationManager {
     }
   }
 
-  async _runPhase(phase) {
-    const agentCount = this.agents.length;
-
-    for (let round = 0; round < phase.rounds; round++) {
-      for (let i = 0; i < agentCount; i++) {
-        const speaker = this.agents[i];
-        const speakerP = speaker.personality;
-
-        for (const a of this.agents) {
-          a.controller.faceToward({ x: 0, y: 0, z: 0 });
-        }
-
-        this.speechBubbleUI.showLoading(
-          speakerP.id,
-          speakerP.name,
-          speaker.controller.character,
-          speakerP.cssColor
-        );
-
-        const messages = this._buildMessages(speaker, phase);
-        const response = await OllamaClient.chat(messages);
-        this.speechBubbleUI.hide(speakerP.id);
-
-        if (!response) continue;
-
-        const cleanResponse = response.slice(0, 250);
-
-        this.speechBubbleUI.show(
-          speakerP.id,
-          speakerP.name,
-          cleanResponse,
-          speaker.controller.character,
-          speakerP.cssColor,
-          this.BUBBLE_DURATION
-        );
-
-        this.speechBubbleUI.addToChatLog(
-          speakerP.name,
-          speakerP.role,
-          cleanResponse,
-          speakerP.cssColor
-        );
-
-        this.history.push({
-          speakerName: speakerP.name,
-          speakerId: speakerP.id,
-          text: cleanResponse
-        });
-
-        await this._delay(this.BUBBLE_DURATION * 1000);
-      }
-    }
-  }
-
-  _buildMessages(speaker, phase) {
-    const speakerP = speaker.personality;
-    const planSoFar = this.planUI.getCurrentPlanSummary();
-
-    let systemContent = speakerP.systemPrompt + '\n\n';
-    systemContent += `You are in a team meeting with your cofounders. ${phase.prompt}`;
-    if (planSoFar) {
-      systemContent += `\n\nDecisions made so far:\n${planSoFar}`;
-    }
-    systemContent += '\n\nKeep your response to 1-2 sentences. Be specific and opinionated. Stay in character.';
-
-    const messages = [{ role: 'system', content: systemContent }];
-
-    for (const entry of this.history) {
-      const isOwn = entry.speakerId === speakerP.id;
-      messages.push({
-        role: isOwn ? 'assistant' : 'user',
-        content: isOwn ? entry.text : `${entry.speakerName}: ${entry.text}`
-      });
-    }
-
-    return messages;
-  }
-
-  async _extractPlanUpdate(phase) {
-    const recentHistory = this.history.slice(-phase.rounds * 3);
-    const transcript = recentHistory.map(e => `${e.speakerName}: ${e.text}`).join('\n');
-
-    const messages = [
-      {
-        role: 'system',
-        content: 'You are a concise note-taker. Extract the key decision from a meeting transcript. Be brief and direct.'
-      },
-      {
-        role: 'user',
-        content: `${phase.extractPrompt}\n\nTranscript:\n${transcript}`
-      }
-    ];
-
-    const result = await OllamaClient.chat(messages);
-    return result ? result.slice(0, 300) : null;
-  }
-
   _togglePause() {
     this.paused = !this.paused;
     const icon = this.chatInput.pauseBtn.querySelector('.pause-icon');
     if (this.paused) {
       icon.innerHTML = '&#9654;'; // play triangle
-      this.chatInput.pauseBtn.title = 'Resume session';
+      this.chatInput.pauseBtn.setAttribute('aria-label', 'Resume session');
       this.chatInput.wrapper.classList.add('paused');
       this.chatInput.hint.textContent = 'Session paused';
     } else {
       icon.innerHTML = '&#10074;&#10074;'; // pause bars
-      this.chatInput.pauseBtn.title = 'Pause session';
+      this.chatInput.pauseBtn.setAttribute('aria-label', 'Pause session');
       this.chatInput.wrapper.classList.remove('paused');
       this.chatInput.hint.textContent = this.chatInput.wrapper.classList.contains('active')
         ? 'Type a message to steer the conversation'

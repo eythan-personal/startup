@@ -21,6 +21,9 @@ export class CharacterController {
     this.velocity = new THREE.Vector3();
     this.targetRotation = 0;
 
+    // External animation override (e.g. dance on hover)
+    this._animationLocked = false;
+
     // Autonomous wandering
     this.autonomous = true;
     this.wanderTarget = new THREE.Vector3();
@@ -28,6 +31,10 @@ export class CharacterController {
     this.wanderPauseDuration = 0;
     this.isWanderPaused = true;
     this._wanderingPaused = false; // external pause (conversations)
+
+    // Water cooler break
+    this._waterCoolerTimer = 30 + Math.random() * 60; // first break in 30-90s
+    this._atWaterCooler = false;
 
     // Create character mesh
     if (gltfModels) {
@@ -47,12 +54,31 @@ export class CharacterController {
   }
 
   pickNewWanderTarget() {
+    // Check if it's time for a water cooler break
+    if (this._waterCoolerTimer <= 0 && CharacterController.waterCoolerPosition) {
+      // Head to the water cooler — offset slightly so agents don't all stand on the same spot
+      const offset = new THREE.Vector3(
+        (Math.random() - 0.5) * 2,
+        0,
+        (Math.random() - 0.5) * 2
+      );
+      this.wanderTarget.copy(CharacterController.waterCoolerPosition).add(offset);
+      this._atWaterCooler = true;
+      this.wanderPauseDuration = 5 + Math.random() * 6; // linger 5-11s at cooler
+      this.wanderPauseTimer = 0;
+      this.isWanderPaused = false;
+      // Reset timer for next break (45-120s)
+      this._waterCoolerTimer = 45 + Math.random() * 75;
+      return;
+    }
+
     const range = 20;
     this.wanderTarget.set(
       (Math.random() - 0.5) * range * 2,
       0,
       (Math.random() - 0.5) * range * 2
     );
+    this._atWaterCooler = false;
     this.wanderPauseDuration = 2 + Math.random() * 4;
     this.wanderPauseTimer = 0;
     this.isWanderPaused = false;
@@ -179,10 +205,26 @@ export class CharacterController {
     this.currentAnimationName = name;
   }
 
+  /** Lock animation so update() won't override it (e.g. dance on hover) */
+  lockAnimation(name) {
+    this.playAnimation(name, true);
+    this._animationLocked = true;
+  }
+
+  /** Unlock and return to normal update-driven animations */
+  unlockAnimation() {
+    this._animationLocked = false;
+  }
+
   update(delta) {
     if (!this.character) return;
 
     const moveDirection = new THREE.Vector3();
+
+    // Count down water cooler break timer while wandering
+    if (this.autonomous && !this._wanderingPaused) {
+      this._waterCoolerTimer -= delta;
+    }
 
     if (this.autonomous && !this._wanderingPaused) {
       if (this.isWanderPaused) {
@@ -227,7 +269,7 @@ export class CharacterController {
       this.character.position.x = Math.max(-boundary, Math.min(boundary, this.character.position.x));
       this.character.position.z = Math.max(-boundary, Math.min(boundary, this.character.position.z));
 
-      if (this.mixer) {
+      if (this.mixer && !this._animationLocked) {
         this.playAnimation('walk');
       }
     } else {
@@ -240,7 +282,7 @@ export class CharacterController {
         this.character.rotation.y += rotationDiff * this.rotationSpeed * delta;
       }
 
-      if (this.mixer) {
+      if (this.mixer && !this._animationLocked) {
         this.playAnimation('idle');
       }
     }
@@ -261,3 +303,6 @@ export class CharacterController {
     }
   }
 }
+
+// Set by main.js after loading the water cooler model
+CharacterController.waterCoolerPosition = null;

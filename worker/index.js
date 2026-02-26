@@ -31,7 +31,9 @@ export default {
     // Chat endpoint
     if (url.pathname === '/api/chat' && request.method === 'POST') {
       try {
-        const { messages } = await request.json();
+        const body = await request.json();
+        const { messages } = body;
+        const max_tokens = Math.min(body.max_tokens || 150, 4000);
 
         const response = await fetch(OPENAI_URL, {
           method: 'POST',
@@ -42,7 +44,7 @@ export default {
           body: JSON.stringify({
             model: MODEL,
             messages,
-            max_tokens: 150,
+            max_tokens,
             temperature: 0.9,
           }),
         });

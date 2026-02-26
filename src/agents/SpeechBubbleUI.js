@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { renderMarkdown } from './markdown.js';
 
 export class SpeechBubbleUI {
   constructor(camera) {
@@ -8,11 +9,12 @@ export class SpeechBubbleUI {
   }
 
   _createChatLog() {
-    const panel = document.createElement('div');
+    const panel = document.createElement('aside');
     panel.className = 'chat-log';
+    panel.setAttribute('aria-label', 'Chat log');
     panel.innerHTML = `
-      <div class="chat-log-header">Polytope Labs — Water Cooler</div>
-      <div class="chat-log-messages"></div>
+      <h2 class="chat-log-header">Polytope Labs — Water Cooler</h2>
+      <div class="chat-log-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
     `;
     document.getElementById('app').appendChild(panel);
     return {
@@ -21,7 +23,7 @@ export class SpeechBubbleUI {
     };
   }
 
-  addToChatLog(agentName, role, text, cssColor) {
+  addToChatLog(agentName, role, text, cssColor, tag = null) {
     const msg = document.createElement('div');
     msg.className = 'chat-log-msg';
 
@@ -41,9 +43,16 @@ export class SpeechBubbleUI {
       nameLine.appendChild(roleEl);
     }
 
+    if (tag) {
+      const tagEl = document.createElement('span');
+      tagEl.className = 'chat-log-tag';
+      tagEl.textContent = tag;
+      nameLine.appendChild(tagEl);
+    }
+
     const body = document.createElement('div');
     body.className = 'chat-log-text';
-    body.textContent = text;
+    body.innerHTML = renderMarkdown(text);
 
     msg.appendChild(nameLine);
     msg.appendChild(body);
@@ -56,6 +65,32 @@ export class SpeechBubbleUI {
     this.chatLog.panel.classList.add('visible');
   }
 
+  addSystemMessage(text) {
+    const msg = document.createElement('div');
+    msg.className = 'chat-log-system';
+    msg.textContent = text;
+    this.chatLog.messages.appendChild(msg);
+    this.chatLog.messages.scrollTop = this.chatLog.messages.scrollHeight;
+    this.chatLog.panel.classList.add('visible');
+  }
+
+  addFileNotice(agentName, filePath, cssColor) {
+    const notice = document.createElement('div');
+    notice.className = 'chat-file-notice';
+
+    const text = document.createElement('span');
+    text.style.color = cssColor;
+    text.textContent = agentName;
+
+    const desc = document.createElement('span');
+    desc.textContent = ` created ${filePath}`;
+
+    notice.appendChild(text);
+    notice.appendChild(desc);
+    this.chatLog.messages.appendChild(notice);
+    this.chatLog.messages.scrollTop = this.chatLog.messages.scrollHeight;
+  }
+
   clearChatLog() {
     this.chatLog.messages.innerHTML = '';
   }
@@ -65,6 +100,8 @@ export class SpeechBubbleUI {
 
     const container = document.createElement('div');
     container.className = 'speech-bubble agent-bubble';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
     container.style.borderLeftColor = cssColor;
 
     const nameEl = document.createElement('div');
@@ -140,8 +177,17 @@ export class SpeechBubbleUI {
     label.className = 'agent-name-label';
     label.dataset.agentId = agentId;
     label.style.color = cssColor;
+    label.setAttribute('role', 'button');
+    label.setAttribute('tabindex', '0');
+    label.setAttribute('aria-label', `${agentName}${role ? ', ' + role : ''}. Click to edit`);
     label.innerHTML = `<span class="agent-label-name">${agentName}</span>` +
       (role ? `<span class="agent-label-role">${role}</span>` : '');
+    label.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        label.click();
+      }
+    });
     document.getElementById('app').appendChild(label);
     return label;
   }
@@ -150,7 +196,7 @@ export class SpeechBubbleUI {
     if (!label || !character) return;
 
     const pos = character.position.clone();
-    pos.y += 3.8;
+    pos.y += 2.1;
     pos.project(this.camera);
 
     const halfW = window.innerWidth / 2;

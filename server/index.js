@@ -18,6 +18,7 @@ app.use(express.json());
 app.post('/api/chat', async (req, res) => {
   try {
     const { messages } = req.body;
+    const max_tokens = Math.min(req.body.max_tokens || 150, 4000);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -28,7 +29,7 @@ app.post('/api/chat', async (req, res) => {
       body: JSON.stringify({
         model: MODEL,
         messages,
-        max_tokens: 150,
+        max_tokens,
         temperature: 0.9
       })
     });

@@ -16,7 +16,16 @@ export class AgentManager {
     this.agents = []; // { controller, personality, nameLabel }
     this.speechBubbleUI = new SpeechBubbleUI(camera);
     this.conversationManager = new ConversationManager(this.speechBubbleUI);
-    this.dmUI = new DMWindowUI(this.conversationManager.planUI, this.conversationManager.fileActivityPanel);
+    this.dmUI = new DMWindowUI(
+      this.conversationManager.planUI,
+      this.conversationManager.fileActivityPanel,
+      this.conversationManager.agentMemory,
+      () => this.conversationManager.history || [],
+      {
+        getAgents: () => this.agents,
+        getSideConvoManager: () => this.conversationManager.sideConvoManager
+      }
+    );
     this.meetingStarted = false;
     this.agentsCreated = false;
     this.modelData = undefined;

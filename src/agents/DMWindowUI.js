@@ -4,10 +4,14 @@ import { AgentFileGenerator } from './AgentFileGenerator.js';
 import { renderMarkdown } from './markdown.js';
 
 export class DMWindowUI {
-  constructor(planUI, fileActivityPanel = null) {
+  constructor(planUI, fileActivityPanel = null, agentMemory = null, getHistory = null, options = {}) {
     this.planUI = planUI;
     this.openWindows = new Map(); // agentId -> { window, history }
     this.fileGenerator = new AgentFileGenerator(fileActivityPanel);
+    this.agentMemory = agentMemory;
+    this.getHistory = getHistory;
+    this._getAgents = options.getAgents || null;
+    this._getSideConvoManager = options.getSideConvoManager || null;
   }
 
   open(agent) {
@@ -115,6 +119,9 @@ export class DMWindowUI {
           this._addFileNotice(state, p.name, filePath, p.cssColor);
         }
       }
+
+      // Detect "go talk to X" directives
+      this._detectTalkDirective(agent, text, state);
     };
 
     sendBtn.addEventListener('click', sendMessage);
@@ -162,6 +169,45 @@ export class DMWindowUI {
     state.messagesEl.scrollTop = state.messagesEl.scrollHeight;
   }
 
+  async _detectTalkDirective(agent, userText, state) {
+    if (!this._getAgents || !this._getSideConvoManager) return;
+
+    const agents = this._getAgents();
+    const agentNames = agents.map(a => a.personality.name).filter(n => n !== agent.personality.name);
+    if (agentNames.length === 0) return;
+
+    try {
+      const messages = [
+        {
+          role: 'system',
+          content: `You detect if the user asked this agent to go talk to a teammate. Available teammates: ${agentNames.join(', ')}. Return ONLY valid JSON: { "talkTo": "AgentName" or null, "topic": "brief topic" or null }`
+        },
+        { role: 'user', content: userText }
+      ];
+
+      const result = await AIClient.chat(messages, { max_tokens: 80 });
+      if (!result) return;
+
+      const parsed = JSON.parse(result);
+      if (!parsed.talkTo) return;
+
+      const targetAgent = agents.find(a =>
+        a.personality.name.toLowerCase() === parsed.talkTo.toLowerCase()
+      );
+      if (!targetAgent || targetAgent.personality.id === agent.personality.id) return;
+
+      const sideConvoManager = this._getSideConvoManager();
+      if (!sideConvoManager) return;
+
+      const p = agent.personality;
+      this._addMessage(state, p.name, p.cssColor, `On my way to talk to ${targetAgent.personality.name}!`, false);
+
+      sideConvoManager.startDirectedChat(agent, targetAgent, parsed.topic);
+    } catch {
+      // Silently ignore parse failures
+    }
+  }
+
   _buildMessages(agent, dmHistory) {
     const p = agent.personality;
     const planSummary = this.planUI ? this.planUI.getCurrentPlanSummary() : '';
@@ -171,6 +217,19 @@ export class DMWindowUI {
     systemContent += 'Keep responses to 1-3 sentences.\n';
     if (planSummary) {
       systemContent += `\nCurrent plan:\n${planSummary}\n`;
+    }
+
+    if (this.agentMemory) {
+      systemContent += this.agentMemory.getTeamRoster(p.id);
+      systemContent += this.agentMemory.getPromptBlock(p.id);
+    }
+
+    if (this.getHistory) {
+      const teamHistory = this.getHistory().slice(-5);
+      if (teamHistory.length > 0) {
+        systemContent += '\nRecent team discussion:\n';
+        systemContent += teamHistory.map(e => `${e.speakerName}: ${e.text}`).join('\n') + '\n';
+      }
     }
 
     const messages = [{ role: 'system', content: systemContent }];

@@ -1,11 +1,13 @@
+import * as THREE from 'three';
 import { AIClient } from './AIClient.js';
 
 export class SideConversationManager {
-  constructor(speechBubbleUI, agents, planUI, getWorkingContext) {
+  constructor(speechBubbleUI, agents, planUI, getWorkingContext, agentMemory = null) {
     this.speechBubbleUI = speechBubbleUI;
     this.agents = agents;
     this.planUI = planUI;
     this.getWorkingContext = getWorkingContext || null;
+    this.agentMemory = agentMemory;
     this.lastSideChat = 0;
     this.COOLDOWN = 30000; // 30 seconds
     this.CHANCE = 0.2; // 20% chance
@@ -34,31 +36,118 @@ export class SideConversationManager {
     // Pick 2 random agents
     const shuffled = [...this.agents].sort(() => Math.random() - 0.5);
     const [agentA, agentB] = shuffled.slice(0, 2);
+
+    // Walk agents toward each other
+    await this._gatherAgents(agentA, agentB);
+
     const pA = agentA.personality;
     const pB = agentB.personality;
 
     const planSummary = this.planUI.getCurrentPlanSummary();
     const ctx = this.getWorkingContext ? this.getWorkingContext() : null;
 
-    // Agent A starts
-    const msgA = await this._generateSideMessage(pA, pB, planSummary, ctx, null);
-    if (!msgA) return;
+    try {
+      // Agent A starts
+      const msgA = await this._generateSideMessage(pA, pB, planSummary, ctx, null);
+      if (!msgA) return;
 
-    this._showSideMessage(agentA, msgA);
-    await this._delay(this.BUBBLE_DURATION * 1000);
+      this._showSideMessage(agentA, msgA);
+      await this._delay(this.BUBBLE_DURATION * 1000);
 
-    // Agent B responds
-    const msgB = await this._generateSideMessage(pB, pA, planSummary, ctx, msgA);
-    if (!msgB) return;
+      // Agent B responds
+      const msgB = await this._generateSideMessage(pB, pA, planSummary, ctx, msgA);
+      if (!msgB) return;
 
-    this._showSideMessage(agentB, msgB);
-    await this._delay(this.BUBBLE_DURATION * 1000);
+      this._showSideMessage(agentB, msgB);
+      await this._delay(this.BUBBLE_DURATION * 1000);
+    } finally {
+      // Resume wandering
+      agentA.controller.resumeWandering();
+      agentB.controller.resumeWandering();
+    }
   }
 
-  async _generateSideMessage(speaker, other, planSummary, ctx, previousMsg) {
+  /** Walk two agents to a shared midpoint, pause, and face each other. */
+  async _gatherAgents(agentA, agentB) {
+    const posA = agentA.controller.position;
+    const posB = agentB.controller.position;
+    const midpoint = new THREE.Vector3().addVectors(posA, posB).multiplyScalar(0.5);
+
+    // Offset so they stand side by side, not on top of each other
+    const dir = new THREE.Vector3().subVectors(posB, posA);
+    dir.y = 0;
+    dir.normalize();
+    const offsetA = midpoint.clone().add(dir.clone().multiplyScalar(-1));
+    const offsetB = midpoint.clone().add(dir.clone().multiplyScalar(1));
+
+    await Promise.all([
+      agentA.controller.walkTo(offsetA),
+      agentB.controller.walkTo(offsetB)
+    ]);
+
+    // Pause and face each other
+    agentA.controller.pauseWandering();
+    agentB.controller.pauseWandering();
+    agentA.controller.faceToward(agentB.controller.position);
+    agentB.controller.faceToward(agentA.controller.position);
+  }
+
+  /** Triggered by a DM directive — one agent walks to another and they chat about a topic. */
+  async startDirectedChat(fromAgent, toAgent, topic) {
+    if (this.running) return;
+    this.running = true;
+
+    try {
+      // Walk fromAgent to toAgent's position (with a small offset)
+      const targetPos = toAgent.controller.position.clone();
+      const dir = new THREE.Vector3().subVectors(fromAgent.controller.position, targetPos);
+      dir.y = 0;
+      dir.normalize();
+      const arrivalPos = targetPos.clone().add(dir.multiplyScalar(1.5));
+
+      await fromAgent.controller.walkTo(arrivalPos);
+
+      // Pause both and face each other
+      fromAgent.controller.pauseWandering();
+      toAgent.controller.pauseWandering();
+      fromAgent.controller.faceToward(toAgent.controller.position);
+      toAgent.controller.faceToward(fromAgent.controller.position);
+
+      const pFrom = fromAgent.personality;
+      const pTo = toAgent.personality;
+      const planSummary = this.planUI.getCurrentPlanSummary();
+      const ctx = this.getWorkingContext ? this.getWorkingContext() : null;
+
+      // fromAgent initiates
+      const topicPrompt = topic ? `Start a brief chat with ${pTo.name} about: ${topic}` : null;
+      const msgA = await this._generateSideMessage(pFrom, pTo, planSummary, ctx, null, topicPrompt);
+      if (msgA) {
+        this._showSideMessage(fromAgent, msgA);
+        await this._delay(this.BUBBLE_DURATION * 1000);
+
+        // toAgent responds
+        const msgB = await this._generateSideMessage(pTo, pFrom, planSummary, ctx, msgA);
+        if (msgB) {
+          this._showSideMessage(toAgent, msgB);
+          await this._delay(this.BUBBLE_DURATION * 1000);
+        }
+      }
+    } finally {
+      fromAgent.controller.resumeWandering();
+      toAgent.controller.resumeWandering();
+      this.running = false;
+    }
+  }
+
+  async _generateSideMessage(speaker, other, planSummary, ctx, previousMsg, topicPrompt = null) {
     let systemContent = speaker.systemPrompt + '\n\n' +
       `You're having a quick aside with ${other.name} (${other.role}). ` +
       `Be casual, brief. React to something the team is working on. One sentence max.\n`;
+
+    if (this.agentMemory) {
+      const note = this.agentMemory.getTeammateNote(speaker.id, other.id);
+      if (note) systemContent += note + '\n';
+    }
 
     if (ctx && ctx.goal) {
       systemContent += `\nTeam goal: ${ctx.goal}\n`;
@@ -75,6 +164,8 @@ export class SideConversationManager {
 
     if (previousMsg) {
       messages.push({ role: 'user', content: `${other.name}: ${previousMsg}` });
+    } else if (topicPrompt) {
+      messages.push({ role: 'user', content: topicPrompt });
     } else {
       messages.push({ role: 'user', content: `Start a brief casual aside with ${other.name} about what the team is working on.` });
     }

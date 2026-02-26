@@ -32,6 +32,9 @@ export class CharacterController {
     this.isWanderPaused = true;
     this._wanderingPaused = false; // external pause (conversations)
 
+    // walkTo() promise support
+    this._walkToResolve = null;
+
     // Water cooler break
     this._waterCoolerTimer = 30 + Math.random() * 60; // first break in 30-90s
     this._atWaterCooler = false;
@@ -82,6 +85,17 @@ export class CharacterController {
     this.wanderPauseDuration = 2 + Math.random() * 4;
     this.wanderPauseTimer = 0;
     this.isWanderPaused = false;
+  }
+
+  /** Walk to a world position. Returns a Promise that resolves when the agent arrives. */
+  walkTo(position) {
+    return new Promise((resolve) => {
+      this.wanderTarget.copy(position);
+      this.wanderTarget.y = 0;
+      this.isWanderPaused = false;
+      this._wanderingPaused = false;
+      this._walkToResolve = resolve;
+    });
   }
 
   pauseWandering() {
@@ -241,6 +255,13 @@ export class CharacterController {
           this.isWanderPaused = true;
           this.wanderPauseTimer = 0;
           this.wanderPauseDuration = 2 + Math.random() * 4;
+
+          // Resolve walkTo() promise if pending
+          if (this._walkToResolve) {
+            const resolve = this._walkToResolve;
+            this._walkToResolve = null;
+            resolve();
+          }
         } else {
           toTarget.normalize();
           moveDirection.copy(toTarget);

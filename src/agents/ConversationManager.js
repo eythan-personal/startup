@@ -4,6 +4,7 @@ import { SideConversationManager } from './SideConversationManager.js';
 import { FileBrowserUI } from './FileBrowserUI.js';
 import { AgentFileGenerator } from './AgentFileGenerator.js';
 import { FileActivityPanel } from './FileActivityPanel.js';
+import { AgentMemory } from './AgentMemory.js';
 
 const LENGTH_HINTS = [
   'Keep it to 1 sentence.',
@@ -43,6 +44,7 @@ export class ConversationManager {
     this._pauseResolve = null;
     this.sideConvoManager = null;
     this.fileGenerator = new AgentFileGenerator(this.fileActivityPanel);
+    this.agentMemory = new AgentMemory();
 
     this.workingContext = {
       goal: '',
@@ -143,12 +145,18 @@ export class ConversationManager {
     this.history = [];
     this.fileActivityPanel.setAgents(this.agents);
 
+    // Initialize per-agent memory
+    for (const a of this.agents) {
+      this.agentMemory.init(a.personality.id, this.agents);
+    }
+
     // Agents keep wandering — wait for user directive before gathering
     this.sideConvoManager = new SideConversationManager(
       this.speechBubbleUI,
       this.agents,
       this.planUI,
-      () => this.workingContext
+      () => this.workingContext,
+      this.agentMemory
     );
     this._enableInput();
     this.chatInput.input.placeholder = 'Tell the team what to work on...';
@@ -264,6 +272,9 @@ export class ConversationManager {
           text: cleanResponse
         });
 
+        // Fire-and-forget memory update
+        this.agentMemory.updateAfterSpeech(speakerP.id, cleanResponse, this.history);
+
         await this._delay(this.BUBBLE_DURATION * 1000);
       }
 
@@ -307,6 +318,8 @@ export class ConversationManager {
         systemContent += `- ${d.topic}: ${d.decision}\n`;
       }
     }
+    systemContent += this.agentMemory.getTeamRoster(speakerP.id);
+    systemContent += this.agentMemory.getPromptBlock(speakerP.id);
     systemContent += `\n${pickLengthHint()} Be specific and opinionated. Stay in character.`;
 
     const messages = [{ role: 'system', content: systemContent }];
@@ -466,6 +479,9 @@ export class ConversationManager {
           text: cleanResponse
         });
 
+        // Fire-and-forget memory update
+        this.agentMemory.updateAfterSpeech(speakerP.id, cleanResponse, this.history);
+
         await this._delay(this.BUBBLE_DURATION * 1000);
 
         // Auto-generate files based on agent's expertise
@@ -500,6 +516,8 @@ export class ConversationManager {
     if (planSoFar) {
       systemContent += `\nCurrent plan:\n${planSoFar}\n`;
     }
+    systemContent += this.agentMemory.getTeamRoster(speakerP.id);
+    systemContent += this.agentMemory.getPromptBlock(speakerP.id);
     systemContent += `\nRespond to the team lead's input from your role's perspective. Be specific and actionable. ${pickLengthHint()} Stay in character.`;
 
     const messages = [{ role: 'system', content: systemContent }];
